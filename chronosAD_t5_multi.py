@@ -8,19 +8,18 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ---------- 공통 하이퍼파라미터 ----------
-CONTEXT_LEN = 1024   # 과거 컨텍스트 길이
+CONTEXT_LEN = 512   # 과거 컨텍스트 길이
 HORIZON     = 64    # 한 번에 예측할 길이
-STRIDE      = 64    # 창 이동 간격
-BATCH_SIZE  = 16    # 배치 크기
+STRIDE      = 32    # 창 이동 간격
+BATCH_SIZE  = 32    # 배치 크기
 THRESHOLD_Z = 4.0   # robust z 임계값
 OUT_DIR     = "anomaly_outputs"
 
 # (선택) Chronos 샘플 수: 메모리/시간에 큰 영향
-CHRONOS_NUM_SAMPLES = 50  # 20~50 권장. 더 빠르게 하려면 줄이기
+CHRONOS_NUM_SAMPLES = 30  # 20~50 권장. 더 빠르게 하려면 줄이기
 
-os.makedirs(OUT_DIR, exist_ok=True)
 
-# ---------- 멀티 GPU 유틸 ----------
+
 def build_pipelines_multi_gpu(model_name="amazon/chronos-t5-base", dtype="auto"):
     """
     GPU가 여러 장이면 GPU마다 ChronosPipeline을 하나씩 로드하여 리스트로 반환.
@@ -41,6 +40,7 @@ def build_pipelines_multi_gpu(model_name="amazon/chronos-t5-base", dtype="auto")
         )
         pipes.append(pipe)
     return pipes
+
 
 def _predict_worker(pipe, contexts, prediction_length, **predict_kwargs):
     """
@@ -106,31 +106,7 @@ def predict_batch_multi_gpu(pipes, contexts, prediction_length, **predict_kwargs
     # 스택 (numpy로 통일)
     return np.stack(results, axis=0)
 
-# ---------- 모델 로딩 ----------
-# 싱글 파이프라인(기본)
-pipeline = ChronosPipeline.from_pretrained(
-    "amazon/chronos-t5-base",
-    device_map="auto",
-    dtype="auto",
-)
-print(pipeline)
 
-# 멀티 GPU 파이프라인(여러 장일 때만)
-PIPES = build_pipelines_multi_gpu(model_name="amazon/chronos-t5-base", dtype="auto")
-USE_MULTI_GPU = len(PIPES) > 0
-if USE_MULTI_GPU:
-    print(f"[INFO] Multi-GPU enabled: {len(PIPES)} GPUs")
-else:
-    print("[INFO] Single GPU/CPU mode")
-
-# ---------- 데이터 로딩 ----------
-csv_path = "./3PDX_TimeseriesAD/data/MachineDataLog/preprocessing.csv"
-df = pd.read_csv(csv_path)
-print(df.head())
-
-# chronosAD.py 상단에 임시로 추가
-print("pandas/numpy:", __import__("pandas").__version__, __import__("numpy").__version__)
-print("csv_path type:", type(csv_path))
 
 def is_constant(series: pd.Series) -> bool:
     """모든 값이 동일하면 True"""
@@ -142,7 +118,10 @@ def detect_anomalies_one_column(values: np.ndarray,
                                 stride=STRIDE,
                                 batch_size=BATCH_SIZE,
                                 thr=THRESHOLD_Z,
-                                num_samples=CHRONOS_NUM_SAMPLES):
+                                num_samples=CHRONOS_NUM_SAMPLES,
+                                use_multi_gpu=None,
+                                pipes=[],
+                                pipeline=None):
     """단일 1D 시계열에서 Chronos 배치 예측 기반 이상치 마스크/점수 계산 (멀티 GPU 지원)"""
     s = values.astype(float)
     n = len(s)
@@ -154,15 +133,14 @@ def detect_anomalies_one_column(values: np.ndarray,
     residual_cnt = np.zeros(n)
 
     # 배치 진행률 tqdm
-    for b in tqdm(range(0, len(starts), batch_size),
-                  desc="  - batches", leave=False):
+    for b in tqdm(range(0, len(starts), batch_size), desc="  - batches", leave=False):
         chunk = starts[b:b+batch_size]
         contexts = [torch.tensor(s[i - context_len:i], dtype=torch.float32) for i in chunk]
 
-        if USE_MULTI_GPU:
+        if use_multi_gpu:
             # 여러 GPU에 분산 추론
             fc_np = predict_batch_multi_gpu(
-                PIPES, contexts, prediction_length=horizon, num_samples=num_samples
+                pipes, contexts, prediction_length=horizon, num_samples=num_samples
             )  # [B, S, H] numpy
         else:
             # 싱글 경로
@@ -201,6 +179,7 @@ def detect_anomalies_one_column(values: np.ndarray,
     anoms[mask] = np.abs(robust_z[mask]) > thr
     return anoms, robust_z
 
+
 def plot_and_save(series: np.ndarray, anoms: np.ndarray, title: str, out_path: str):
     """시각화/저장"""
     plt.figure(figsize=(10,4))
@@ -221,7 +200,35 @@ def plot_and_save(series: np.ndarray, anoms: np.ndarray, title: str, out_path: s
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close()
 
-def main():
+
+def main():    
+    os.makedirs(OUT_DIR, exist_ok=True)
+    # ---------- 모델 로딩 ----------
+    # 싱글 파이프라인(기본)
+    pipeline = ChronosPipeline.from_pretrained(
+        "amazon/chronos-t5-base",
+        device_map="auto",
+        dtype="auto",
+    )
+    print(pipeline)
+
+    # 멀티 GPU 파이프라인(여러 장일 때만)
+    PIPES = build_pipelines_multi_gpu(model_name="amazon/chronos-t5-base", dtype="auto")
+    USE_MULTI_GPU = len(PIPES) > 0
+    if USE_MULTI_GPU:
+        print(f"[INFO] Multi-GPU enabled: {len(PIPES)} GPUs")
+    else:
+        print("[INFO] Single GPU/CPU mode")
+
+    # ---------- 데이터 로딩 ----------
+    csv_path = "./3PDX_TimeseriesAD/data/MachineDataLog/preprocessing.csv"
+    df = pd.read_csv(csv_path)
+    print(df.head())
+
+    # chronosAD.py 상단에 임시로 추가
+    print("pandas/numpy:", __import__("pandas").__version__, __import__("numpy").__version__)
+    print("csv_path type:", type(csv_path))
+
     # ---------- 여러 칼럼에 대해 실행 ----------
     # 1) 대상 칼럼 자동 선택: 수치형 & (비상수) & (비-bool)
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -240,7 +247,15 @@ def main():
             s_pd = pd.Series(series).interpolate(limit_direction="both")
             series = s_pd.to_numpy()
 
-        anoms, z = detect_anomalies_one_column(series)
+        anoms, z = detect_anomalies_one_column(series, pipeline=pipeline,
+                                               context_len=CONTEXT_LEN,
+                                               horizon=HORIZON,
+                                               stride=STRIDE,
+                                               batch_size=BATCH_SIZE,
+                                               thr=THRESHOLD_Z,
+                                               num_samples=CHRONOS_NUM_SAMPLES,
+                                               use_multi_gpu=USE_MULTI_GPU,
+                                               pipes=PIPES if USE_MULTI_GPU else [],)
 
         # 결과 저장
         out_png = os.path.join(OUT_DIR, f"anomalies_{col}.png")
