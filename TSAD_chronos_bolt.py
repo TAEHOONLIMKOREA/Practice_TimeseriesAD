@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import torch
 
 from autogluon.timeseries import TimeSeriesPredictor, TimeSeriesDataFrame
 
@@ -16,7 +17,7 @@ HORIZON     = 32    # 한 번에 예측할 길이
 STRIDE      = 16    # 창 이동 간격(클수록 빠름)
 THRESHOLD_Z = 4.0   # robust z-score 임계값
 OUT_DIR     = "anomaly_outputs_bolt"
-CSV_PATH    = "./3PDX_TimeseriesAD/data/MachineDataLog/preprocessing.csv"
+CSV_PATH    = "./data/preprocessing.csv"
 TIME_COL_CANDIDATES = ["timestamp","time","date","datetime"]  # 자동 탐지 후보
 
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -75,15 +76,24 @@ def main():
     print(f"[INFO] 대상 칼럼 수: {len(target_cols)} -> {target_cols}")
 
     # Zero-shot Chronos-Bolt(Base) 예측기 생성 및 경량 fit
-    predictor = TimeSeriesPredictor(prediction_length=HORIZON)
+    chronos_device = "cuda" if torch.cuda.is_available() else "cpu"
     warmup_col = target_cols[0]
     warmup_tsdf = to_tsdf(df[warmup_col].to_numpy(), time_index, item_id=warmup_col)
+    predictor = TimeSeriesPredictor(prediction_length=HORIZON)
     predictor = predictor.fit(
-        warmup_tsdf,
-        hyperparameters={
-        "Chronos": {"model_path": "amazon/chronos-bolt-base"},
-        }
-    )
+    warmup_tsdf,
+    hyperparameters={
+        "Chronos": {
+            "model_path": "amazon/chronos-bolt-base",  # 또는 "autogluon/chronos-bolt-base"
+            "device": chronos_device,                  # ← Chronos dict 안에!
+            # "dtype": "float32",                      # (옵션) 메모리 절약
+        },
+        # (권장) 백업 모델도 함께 두면 Chronos 실패해도 예측 가능
+        "Naive": {},
+        "SeasonalNaive": {},
+        "ETS": {},
+    },
+)
 
     summary = []
 

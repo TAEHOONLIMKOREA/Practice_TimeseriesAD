@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 
-INPUT_CSV = "./3PDX_TimeseriesAD/data/MachineDataLog/preprocessing.csv"
+INPUT_CSV = "./data/preprocessing.csv"
 OUTDIR = "anomaly_outputs_statistics"
 os.makedirs(OUTDIR, exist_ok=True)
 

@@ -1,2 +1,8 @@
 __pycache__/
 data/
+
+# anomaly_outputs로 시작하는 폴더 무시
+anomaly_outputs*/
+
+models/
+AutogluonModels/
