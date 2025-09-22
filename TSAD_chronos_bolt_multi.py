@@ -18,7 +18,7 @@ from autogluon.timeseries import TimeSeriesPredictor, TimeSeriesDataFrame
 # 하이퍼파라미터
 # -----------------------------
 MEGA_BATCH_ITEMS = 4096  # 메가배치 크기: 여러 컬럼×윈도우를 한 번에. 2048~8192 사이 튜닝
-BATCH_WINDOWS    = 256   # (더 이상 필수 아님) per-column 배치 크기. 남겨두지만 미사용 가능
+# BATCH_WINDOWS    = 256   # (더 이상 필수 아님) per-column 배치 크기. 남겨두지만 미사용 가능
 
 CONTEXT_LEN = 2048    # 예측 컨텍스트 길이
 HORIZON     = 256     # 한 번에 예측할 길이
@@ -63,13 +63,15 @@ def to_tsdf(series: np.ndarray, idx: pd.DatetimeIndex, item_id: str) -> TimeSeri
 
 def plot_and_save(series: np.ndarray, anoms: np.ndarray, title: str, out_path: str):
     plt.figure(figsize=(10,4))
-    plt.plot(series, label="data")
+    plt.plot(series, label="data", alpha=0.5)
     idxs = np.where(anoms)[0]
     if len(idxs):
-        plt.scatter(idxs, series[anoms], marker="o", label="anomaly", color="red", alpha=0.5)
+        plt.scatter(idxs, series[anoms], marker="o", label="anomaly", color="red")
     plt.title(title)
-    plt.legend(); plt.grid()
-    plt.savefig(out_path, dpi=120, bbox_inches="tight"); plt.close()
+    plt.legend()
+    plt.grid()
+    plt.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close()
 
 # -----------------------------
 # 모델 사전 다운로드 (429 방지)
