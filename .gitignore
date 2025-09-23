@@ -4,6 +4,7 @@ data/
 # anomaly_outputs로 시작하는 폴더 무시
 anomaly_outputs*/
 anomaly*/
+anomalies*/
 
 models/
 AutogluonModels/

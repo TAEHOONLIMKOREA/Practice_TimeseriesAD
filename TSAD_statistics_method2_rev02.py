@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-원본 시계열 CSV에서 4가지 방법(점/구간/집단/변화점) 중
-'가장 이상치 탐지율이 높은 방법' 하나를 자동으로 선택하여,
-그 방법으로만 모든 수치 컬럼을 시각화(원본 위에 표시)하는 코드.
+원본 시계열 CSV에서 4가지 방법(점/구간/집단/변화점)을
+'각각' 원본 데이터 위에 시각화(타임별 매칭)하여 저장하는 코드.
 
-입력: /mnt/data/preprocessing.csv  (열: Time, Layer, 나머지 수치 컬럼들)
+입력: ./data/preprocessing.csv  (열: Time, Layer, 나머지 수치 컬럼들)
 출력:
-  - chosen_method.txt         (선정된 이상치 방법과 탐지율 요약)
-  - plots/<column>.png        (각 컬럼별 시각화 PNG)
+  - method_summary.txt         (방법별 카운트/탐지율 요약)
+  - plots/<column>__<method>.png  (각 컬럼 x 방법별 시각화 PNG)
 필요 라이브러리: pandas, numpy, matplotlib
 """
 
@@ -20,10 +19,10 @@ import matplotlib.pyplot as plt
 
 
 # ============= 설정 =============
-CSV_PATH = "./data/preprocessing.csv"  # 필요 시 변경
+CSV_PATH = "./data/preprocessing_denoised.csv"  # 필요 시 변경
 TIME_COL = "Time"
 SAVE_PLOTS = True
-PLOT_DIR = Path("./anomaly_statistical_methods2_rev02/plots")
+PLOT_DIR = Path("./anomaly_statistical_methods2_denoised_rev02/plots")
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 # IQR 점 이상치 기준
@@ -48,8 +47,10 @@ def ensure_datetime(df: pd.DataFrame, col: str) -> pd.DataFrame:
     df = df.dropna(subset=[col]).sort_values(col).reset_index(drop=True)
     return df
 
+
 def numeric_columns(df: pd.DataFrame) -> list:
     return df.select_dtypes(include=[np.number]).columns.tolist()
+
 
 def iqr_bounds(s: pd.Series, k: float = IQR_K):
     q1, q3 = s.quantile(0.25), s.quantile(0.75)
@@ -58,9 +59,11 @@ def iqr_bounds(s: pd.Series, k: float = IQR_K):
     high = q3 + k * iqr
     return low, high
 
+
 def detect_point_outliers_iqr(s: pd.Series) -> pd.Series:
     low, high = iqr_bounds(s)
     return (s < low) | (s > high)
+
 
 def rolling_zscore(s: pd.Series, window: int = ROLL_WINDOW) -> pd.Series:
     # 강건 롤링 기준 (median / MAD 근사)
@@ -71,9 +74,11 @@ def rolling_zscore(s: pd.Series, window: int = ROLL_WINDOW) -> pd.Series:
     z = (s - med) / (1.4826 * mad_approx)  # MAD 정규화 계수
     return z
 
+
 def detect_contextual_outliers(s: pd.Series, z_thresh: float = Z_THRESH, window: int = ROLL_WINDOW) -> pd.Series:
     z = rolling_zscore(s, window=window)
     return z.abs() > z_thresh
+
 
 def group_consecutive_true(mask: pd.Series, min_len: int = 1):
     """True가 연속된 구간을 (start_idx, end_idx) 리스트로 반환 (end_idx 포함)"""
@@ -95,6 +100,7 @@ def group_consecutive_true(mask: pd.Series, min_len: int = 1):
         runs.append((start, prev))
     return runs
 
+
 def detect_collective_outliers(s: pd.Series) -> pd.Series:
     # 컨텍스트 이상치 마스크에서 연속 길이가 기준 이상인 구간만 집단 이상치로 본다
     ctx_mask = detect_contextual_outliers(s)
@@ -103,6 +109,7 @@ def detect_collective_outliers(s: pd.Series) -> pd.Series:
     for st, ed in runs:
         collective.iloc[st:ed+1] = True
     return collective
+
 
 def cusum_change_points(s: pd.Series, threshold=CUSUM_THRESHOLD, drift=CUSUM_DRIFT):
     """간단 CUSUM(mean-shift) 변화점 인덱스 리스트"""
@@ -138,7 +145,7 @@ num_cols = numeric_columns(df)
 n_rows = len(df)
 n_points_total = n_rows * max(1, len(num_cols))
 
-# ============= 방법별 탐지율 계산 =============
+# ============= 방법별 탐지 카운트/탐지율 계산 =============
 method_stats = {
     "point": 0,
     "contextual": 0,
@@ -146,7 +153,6 @@ method_stats = {
     "changepoint": 0,
 }
 
-# 각 컬럼에서 마스크를 합산해 전체 (row, col) 기준 탐지 수 세기
 for col in num_cols:
     s = df[col]
 
@@ -169,31 +175,28 @@ for col in num_cols:
 # 탐지율(전체 데이터포인트 대비 비율)
 method_rates = {k: v / n_points_total for k, v in method_stats.items()}
 
-# 가장 높은 탐지율의 방법 선택
-chosen_method = max(method_rates.items(), key=lambda kv: kv[1])[0]
-
-# 결과 저장
-with open("chosen_method.txt", "w", encoding="utf-8") as f:
+# 요약 저장
+with open("method_summary.txt", "w", encoding="utf-8") as f:
     f.write(json.dumps({
         "n_rows": n_rows,
         "n_numeric_cols": len(num_cols),
         "n_points_total": n_points_total,
         "method_counts": method_stats,
-        "method_rates": method_rates,
-        "chosen_method": chosen_method
+        "method_rates": method_rates
     }, ensure_ascii=False, indent=2))
 
-print("=== 탐지 방법별 카운트/탐지율 ===")
+print("=== 방법별 카운트/탐지율 요약 ===")
 print(json.dumps({
     "method_counts": method_stats,
-    "method_rates": method_rates,
-    "chosen_method": chosen_method
+    "method_rates": method_rates
 }, ensure_ascii=False, indent=2))
 
-# ============= 시각화 (선정된 1가지 방법만 표시) =============
-def plot_series_with_single_method(t, y, title, method: str, save_path: Path):
+
+# ============= 시각화 (각 방법별로 모두 저장) =============
+def plot_series_with_method(t, y, title, method: str, save_path: Path):
+    """원본 시계열 위에 특정 이상치 방법만 오버레이하여 단일 그래프 저장"""
     fig, ax = plt.subplots(figsize=(14, 4))
-    
+
     # 원본 시계열
     ax.plot(
         t, y, linewidth=0.8, label="series",
@@ -217,7 +220,7 @@ def plot_series_with_single_method(t, y, title, method: str, save_path: Path):
             ax.scatter(
                 t.iloc[idx], y.iloc[idx],
                 s=20, label="contextual outlier",
-                marker="x", color="red", alpha=0.5
+                marker="x", color="red", alpha=0.7
             )
 
     elif method == "collective":
@@ -226,20 +229,22 @@ def plot_series_with_single_method(t, y, title, method: str, save_path: Path):
         for i, (st, ed) in enumerate(runs):
             ax.axvspan(
                 t.iloc[st], t.iloc[ed],
-                alpha=0.5, color="red",
+                alpha=0.3, color="red",
                 label="collective outlier" if i == 0 else None
             )
 
     elif method == "changepoint":
         _, cps = detect_changepoint_mask(y)
         if len(cps):
+            y_min = np.nanmin(y)
+            y_max = np.nanmax(y)
             ax.vlines(
-                t.iloc[cps], ymin=np.nanmin(y), ymax=np.nanmax(y),
-                linestyles="dashed", color="red", alpha=0.5,
+                t.iloc[cps], ymin=y_min, ymax=y_max,
+                linestyles="dashed", color="red", alpha=0.7,
                 label="changepoint"
             )
 
-    # 제목에 어떤 방법으로 탐지했는지 표시
+    # 제목/축/범례
     ax.set_title(f"{title} | Outlier method: {method}", fontsize=12)
     ax.set_xlabel("Time")
     ax.set_ylabel(title)
@@ -248,18 +253,14 @@ def plot_series_with_single_method(t, y, title, method: str, save_path: Path):
     fig.savefig(save_path, dpi=150)
     plt.close(fig)
 
+ALL_METHODS = ["point", "contextual", "collective", "changepoint"]
+
 if SAVE_PLOTS:
     for col in num_cols:
-        plot_series_with_single_method(
-            df[TIME_COL], df[col], col, chosen_method, PLOT_DIR / f"{col}.png"
-        )
-    print(f"\n선정된 방법: {chosen_method}")
-    print(f"시각화 PNG 저장 경로: {PLOT_DIR.resolve()}")
-
-"""
-메모:
-- '탐지율'은 전체 데이터포인트(행*수치열)의 합 대비 각 방법이 True로 판정한 포인트의 비율로 정의.
-- 변화점은 지점 수로 계산하므로 다른 방법 대비 상대적으로 낮을 수 있습니다.
-- 데이터 특성에 맞게 ROLL_WINDOW, Z_THRESH, COLLECTIVE_MIN_LEN, CUSUM_THRESHOLD를 조정하세요.
-- 필요 시 '탐지율' 정의를 컬럼별 평균 비율 등으로 바꿔도 됩니다.
-"""
+        for m in ALL_METHODS:
+            out_path = PLOT_DIR / f"{col}__{m}.png"
+            plot_series_with_method(
+                df[TIME_COL], df[col], col, m, out_path
+            )
+    print("\n각 컬럼별로 모든 방법의 시각화 PNG가 저장되었습니다.")
+    print(f"저장 경로: {PLOT_DIR.resolve()}")
